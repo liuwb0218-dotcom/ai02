@@ -35,6 +35,13 @@ class Settings(BaseSettings):
     MODEL_API_KEY: str = ""
     MODEL_TIMEOUT_SECONDS: int = 10
 
+    # ── 本地模型（Ollama / vLLM / LM Studio 等 OpenAI 兼容服务）──
+    # 本地模型通常免鉴权，且首次推理要加载权重，所以超时单独放大
+    LOCAL_MODEL_BASE_URL: str = "http://127.0.0.1:11434/v1"
+    LOCAL_MODEL_NAME: str = "qwen2.5:7b"
+    LOCAL_MODEL_API_KEY: str = ""
+    LOCAL_MODEL_TIMEOUT_SECONDS: int = 60
+
     # ── JWT 双 Token（P1）───────────────────────────
     JWT_SECRET: str = "change_me_in_production"
     JWT_ALGORITHM: str = "HS256"

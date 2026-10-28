@@ -2,23 +2,11 @@
 
 职责：做接口层第一道校验（长度、正数、必填）。
 校验失败由 FastAPI 抛 RequestValidationError，统一转换为 422 VALIDATION_ERROR。
+模型列表相关的模型定义在 schemas/model_config.py。
 """
 from __future__ import annotations
 
 from pydantic import BaseModel, Field
-
-
-class ModelItem(BaseModel):
-    """单个可用模型的描述项"""
-
-    model_name: str = Field(..., description="模型标识，请求 /api/chat 时回传")
-    display_name: str = Field(..., description="前端展示名称")
-
-
-class ModelsResponse(BaseModel):
-    """/api/models 响应：当前可切换的模型列表"""
-
-    models: list[ModelItem]
 
 
 class ChatRequest(BaseModel):

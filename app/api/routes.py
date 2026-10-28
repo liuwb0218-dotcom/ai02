@@ -15,9 +15,16 @@ from app.schemas.chat import (
     ChatResponse,
     DeleteResponse,
     HistoryResponse,
-    ModelsResponse,
 )
-from app.services import chat_service, history_service, llm_client
+from app.schemas.model_config import (
+    DeleteModelResponse,
+    ModelConfigCreate,
+    ModelConfigResponse,
+    ModelConfigUpdate,
+    ModelsResponse,
+    ModelTestResponse,
+)
+from app.services import chat_service, history_service, model_config_service
 
 router = APIRouter()
 
@@ -33,13 +40,68 @@ async def health() -> dict[str, str]:
 
 
 # ═══════════════════════════════════════════════════
-# 2. 模型列表
+# 2. 模型列表与模型配置管理
 # ═══════════════════════════════════════════════════
 
 @router.get("/api/models", tags=["chat"], response_model=ModelsResponse)
-async def list_models() -> ModelsResponse:
-    """返回当前可切换的模型，前端据此渲染下拉框"""
-    return ModelsResponse(models=llm_client.list_models())
+async def list_models(
+    user_id: int | None = Query(None, gt=0, description="传入后额外返回该用户的自建模型"),
+    db: AsyncSession = Depends(get_db),
+) -> ModelsResponse:
+    """返回可切换的模型列表：内置模型 + 该用户自建模型
+
+    不传 user_id 时只返回内置模型（mock / DeepSeek / 本地模型）。
+    """
+    return ModelsResponse(models=await model_config_service.list_for_user(db, user_id))
+
+
+@router.post("/api/models", tags=["models"], response_model=ModelConfigResponse)
+async def create_model(
+    req: ModelConfigCreate,
+    x_user_id: int | None = Header(None, alias="X-User-Id"),
+    db: AsyncSession = Depends(get_db),
+) -> ModelConfigResponse:
+    """新增用户自建模型配置（如接入公司内网模型、其他厂商 API）
+
+    失败语义：重名 409 / 参数非法 422 / 越权 403
+    """
+    return await model_config_service.create(db, req, current_user_id=x_user_id)
+
+
+@router.patch("/api/models/{config_id}", tags=["models"],
+              response_model=ModelConfigResponse)
+async def update_model(
+    config_id: int,
+    req: ModelConfigUpdate,
+    x_user_id: int | None = Header(None, alias="X-User-Id"),
+    db: AsyncSession = Depends(get_db),
+) -> ModelConfigResponse:
+    """修改自建模型配置：支持改地址、模型名、Key、启停；内置模型禁止修改"""
+    return await model_config_service.update(db, config_id, req,
+                                             current_user_id=x_user_id)
+
+
+@router.delete("/api/models/{config_id}", tags=["models"],
+               response_model=DeleteModelResponse)
+async def delete_model(
+    config_id: int,
+    x_user_id: int | None = Header(None, alias="X-User-Id"),
+    db: AsyncSession = Depends(get_db),
+) -> DeleteModelResponse:
+    """删除自建模型配置；内置模型不可删除（可停用）"""
+    await model_config_service.delete(db, config_id, current_user_id=x_user_id)
+    return DeleteModelResponse(deleted=True, id=config_id)
+
+
+@router.post("/api/models/{config_id}/test", tags=["models"],
+             response_model=ModelTestResponse)
+async def test_model(
+    config_id: int,
+    x_user_id: int | None = Header(None, alias="X-User-Id"),
+    db: AsyncSession = Depends(get_db),
+) -> ModelTestResponse:
+    """连通性测试：用一句固定提问验证地址/Key/模型名是否正确"""
+    return await model_config_service.test(db, config_id, current_user_id=x_user_id)
 
 
 # ═══════════════════════════════════════════════════

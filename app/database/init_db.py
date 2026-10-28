@@ -39,6 +39,14 @@ async def init_db() -> None:
 
     logger.info("  ✓ 数据表已就绪: %s", ", ".join(sorted(Base.metadata.tables)))
 
+    # 同步内置模型（mock / DeepSeek / 本地模型），保证 /api/models 至少有可选项
+    # 放在这里而不是 main.py：建表之后立刻执行，避免首次请求时列表为空
+    from app.services import model_config_service  # 延迟 import，避免循环依赖
+    factory = get_session_factory()
+    async with factory() as db:  # type: AsyncSession
+        await model_config_service.seed_builtin(db)
+    logger.info("  ✓ 内置模型已同步")
+
     # 仅 dev 环境预置演示数据，生产不写入任何默认账号
     if settings.is_dev:
         await _seed_demo_users()

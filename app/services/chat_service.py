@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.exceptions import DatabaseException, ModelCallException, ValidationException
 from app.models.conversation import APILog, ChatSession
 from app.schemas.chat import ChatRequest, ChatResponse
-from app.services import llm_client, user_service
+from app.services import llm_client, model_config_service, user_service
 
 logger = logging.getLogger("app.chat")
 
@@ -24,16 +24,19 @@ async def ask(db: AsyncSession, req: ChatRequest) -> ChatResponse:
     if not question:
         raise ValidationException("问题不能为空")
 
-    # 3) 调模型：模型不存在抛 404，调用失败抛 502
+    # 3) 解析模型配置：用户自建优先，其次内置；不存在或已停用抛 404
+    target = await model_config_service.resolve(db, req.user_id, req.model_name)
+
+    # 4) 调模型：超时/连接失败/上游 4xx 5xx 统一抛 502
     try:
-        answer, latency_ms = await llm_client.chat(question, req.model_name)
+        answer, latency_ms = await llm_client.chat(question, target)
     except ModelCallException as exc:
         # 失败也要留调用日志，session_id 为空（此时还没有会话记录）
         await _write_log(db, req.user_id, None, req.model_name,
                          "error", 0, str(exc.message))
         raise
 
-    # 4) 成功：先落会话，flush 拿到自增 ID，再写日志，最后统一提交
+    # 5) 成功：先落会话，flush 拿到自增 ID，再写日志，最后统一提交
     session = ChatSession(
         user_id=req.user_id,
         model_name=req.model_name,

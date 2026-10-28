@@ -46,6 +46,13 @@ class PermissionDeniedException(AppException):
     status_code = 403
 
 
+class ConflictException(AppException):
+    """资源冲突：如用户自建模型标识重名"""
+
+    code = "CONFLICT"
+    status_code = 409
+
+
 class NotFoundException(AppException):
     """资源不存在：用户、会话"""
 

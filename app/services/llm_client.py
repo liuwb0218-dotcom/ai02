@@ -1,52 +1,46 @@
 """LLMClient — 统一封装模型请求、超时、错误与返回结果
 
-本期提供两个模型：
-  - mock：本地链路验证，不依赖网络与 Key
-  - settings.DEFAULT_MODEL：真实模型，走 OpenAI 兼容的 /chat/completions
+模型不再写死在 .env 里，而是由 model_configs 表驱动（见 model_config_service）：
+  - mock：本地模拟，不依赖网络与 Key，用于链路验证
+  - deepseek / local / custom：统一走 OpenAI 兼容的 /chat/completions 接口
+差异点：本地模型通常无需 api_key，且首次加载模型较慢，超时时间单独放宽。
 """
 from __future__ import annotations
 
 import asyncio
 import time
+from dataclasses import dataclass, field
 
 import httpx
 
 from app.core.config import settings
-from app.core.exceptions import ModelCallException, ModelNotFoundException
+from app.core.exceptions import ModelCallException
 
 MOCK_MODEL = "mock"
 
 
-def list_models() -> list[dict[str, str]]:
-    """可用模型列表：mock 必在，并至少返回一个真实模型名"""
-    models = [{"model_name": MOCK_MODEL, "display_name": "Mock 模型"}]
-    if settings.DEFAULT_MODEL and settings.DEFAULT_MODEL != MOCK_MODEL:
-        models.append({
-            "model_name": settings.DEFAULT_MODEL,
-            "display_name": settings.DEFAULT_MODEL,
-        })
-    return models
+@dataclass(slots=True)
+class ModelTarget:
+    """一次模型调用所需的全部参数（由 model_config_service 从数据库解析而来）
+
+    api_key 是解密后的明文，只存在于内存中，不会出现在任何响应里。
+    """
+
+    name: str                              # 配置标识（/api/chat 的 model_name）
+    provider: str                           # mock / deepseek / local / custom
+    base_url: str | None = None
+    upstream_model: str | None = None
+    api_key: str = field(default="", repr=False)   # repr 排除，避免日志打印密钥
+    timeout: int = 10
 
 
-def is_known_model(model_name: str) -> bool:
-    """判断模型名是否在可用列表中，未知模型直接拒绝，避免把请求打到错误地址"""
-    return any(m["model_name"] == model_name for m in list_models())
-
-
-async def chat(question: str, model_name: str) -> tuple[str, int]:
+async def chat(question: str, target: ModelTarget) -> tuple[str, int]:
     """调用模型，返回 (answer, latency_ms)；失败抛 ModelCallException"""
-    if not is_known_model(model_name):
-        # detail 带回可选模型名，前端可直接提示"请从以下模型中选择"
-        raise ModelNotFoundException(
-            f"模型 {model_name} 不存在",
-            detail={"available_models": [m["model_name"] for m in list_models()]},
-        )
-
     started = time.perf_counter()
-    if model_name == MOCK_MODEL:
+    if target.provider == MOCK_MODEL or target.name == MOCK_MODEL:
         answer = await _mock_answer(question)
     else:
-        answer = await _real_answer(question, model_name)
+        answer = await _openai_compatible(question, target)
     # 取整到毫秒，写入 api_call_logs.latency_ms
     latency_ms = int((time.perf_counter() - started) * 1000)
     return answer, latency_ms
@@ -61,38 +55,52 @@ async def _mock_answer(question: str) -> str:
     return f"这是 mock 模型的回答：{question}（当前为本地联调模式，未调用真实大模型）"
 
 
-async def _real_answer(question: str, model_name: str) -> str:
-    """真实模型分支：走 OpenAI 兼容的 /chat/completions 接口"""
-    # Key 缺失属于部署配置问题，提前给明确提示，而不是发一个必然 401 的请求
-    if not settings.MODEL_API_KEY:
-        raise ModelCallException("模型 API Key 未配置，请先在 .env 中设置 MODEL_API_KEY")
-
-    url = settings.MODEL_BASE_URL.rstrip("/") + "/chat/completions"
+async def _openai_compatible(question: str, target: ModelTarget) -> str:
+    """真实模型分支：DeepSeek、本地 Ollama/vLLM、其他自定义服务共用此实现"""
+    url = (target.base_url or "").rstrip("/") + "/chat/completions"
     payload = {
-        "model": model_name,
+        "model": target.upstream_model or target.name,
         "messages": [{"role": "user", "content": question}],
-        "stream": False,   # P0 用一次性返回；SSE 流式属 P1
+        "stream": False,   # 本期一次性返回；SSE 流式属后续迭代
     }
-    headers = {"Authorization": f"Bearer {settings.MODEL_API_KEY}"}
+    headers = {"Content-Type": "application/json"}
+    # 本地模型多为免鉴权，只有配了 Key 才带 Authorization
+    if target.api_key:
+        headers["Authorization"] = f"Bearer {target.api_key}"
 
     # 超时与网络异常统一映射为 502，前端只需处理一种错误码
+    # connect 单独设 5s：本地服务没启动时快速失败，不必等满整个读超时
+    timeout = httpx.Timeout(target.timeout, connect=5.0)
     try:
-        async with httpx.AsyncClient(timeout=settings.MODEL_TIMEOUT_SECONDS) as client:
+        async with httpx.AsyncClient(timeout=timeout) as client:
             resp = await client.post(url, json=payload, headers=headers)
+    except httpx.ConnectTimeout as exc:
+        # 本地服务未启动时走这里：5 秒连接超时，与"推理慢"区分开
+        raise ModelCallException(
+            f"模型 {target.name} 连接超时（5s），请确认 {target.base_url} 可访问"
+        ) from exc
     except httpx.TimeoutException as exc:
-        raise ModelCallException("模型调用超时") from exc
+        raise ModelCallException(
+            f"模型 {target.name} 响应超时（{target.timeout}s）"
+        ) from exc
     except httpx.HTTPError as exc:
-        raise ModelCallException(f"模型调用失败：{exc.__class__.__name__}") from exc
+        # 本地模型最常见的场景：服务没启动，连接被拒绝
+        raise ModelCallException(
+            f"模型 {target.name} 连接失败：{exc.__class__.__name__}，"
+            f"请确认 {target.base_url} 可访问"
+        ) from exc
 
     # 区分上游服务故障（5xx）与请求被拒（4xx，多为 Key 或额度问题）
     if resp.status_code >= 500:
         raise ModelCallException(f"模型服务返回 {resp.status_code}")
     if resp.status_code >= 400:
-        raise ModelCallException(f"模型调用被拒绝：{resp.status_code}")
+        raise ModelCallException(
+            f"模型调用被拒绝：{resp.status_code}（请检查 API Key 与模型名）"
+        )
 
     # 上游把错误塞在 200 响应体里也时有发生，这里按"格式异常"兜底
     try:
         data = resp.json()
         return data["choices"][0]["message"]["content"]
     except (KeyError, IndexError, ValueError) as exc:
-        raise ModelCallException("模型返回格式异常") from exc
+        raise ModelCallException("模型返回格式异常，请确认服务为 OpenAI 兼容接口") from exc

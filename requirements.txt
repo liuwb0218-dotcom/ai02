@@ -10,6 +10,8 @@ pydantic-settings>=2.5,<3.0
 # ── AI 层 ────────────────────────────────────────
 httpx[http2]>=0.27,<0.28
 chromadb>=0.5,<0.6
+# 用户自建模型的 api_key 用 AES-256-GCM 加密入库
+cryptography>=42.0
 
 # ── 鉴权 ─────────────────────────────────────────
 python-jose[cryptography]>=3.3,<3.4
