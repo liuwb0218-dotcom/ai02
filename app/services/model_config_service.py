@@ -106,21 +106,23 @@ async def seed_builtin(db: AsyncSession) -> None:
 
 # ── 查询 ───────────────────────────────────────────
 
-async def list_for_user(db: AsyncSession, user_id: int | None) -> list[ModelItem]:
+async def list_for_user(db: AsyncSession, user_id: int | None,
+                        include_disabled: bool = False) -> list[ModelItem]:
     """列出可用模型：内置模型 + 指定用户的自建模型
 
     顺序上把内置模型放前面，前端下拉框的默认项更稳定。
+    include_disabled=True 用于模型管理页，停用的配置也要能显示出来以便重新启用。
     """
-    conditions = ModelConfig.is_enabled == 1
+    conditions = [] if include_disabled else [ModelConfig.is_enabled == 1]
     if user_id is None:
         rows = (await db.scalars(
-            select(ModelConfig).where(conditions, ModelConfig.owner_user_id.is_(None))
+            select(ModelConfig).where(*conditions, ModelConfig.owner_user_id.is_(None))
             .order_by(ModelConfig.id)
         )).all()
     else:
         rows = (await db.scalars(
             select(ModelConfig).where(
-                conditions,
+                *conditions,
                 (ModelConfig.owner_user_id.is_(None))
                 | (ModelConfig.owner_user_id == user_id),
             ).order_by(ModelConfig.owner_user_id.is_not(None), ModelConfig.id)
@@ -270,11 +272,11 @@ async def test(db: AsyncSession, config_id: int,
                  if row.provider == "local"
                  else settings.MODEL_TIMEOUT_SECONDS),
     )
-    answer, latency_ms = await llm_client.chat("你好，请回复 OK", target)
+    result = await llm_client.chat("你好，请回复 OK", target)
     return ModelTestResponse(
         success=True,
-        latency_ms=latency_ms,
-        answer_preview=answer[:100],
+        latency_ms=result.latency_ms,
+        answer_preview=result.answer[:100],
     )
 
 

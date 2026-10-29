@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import asyncio
+import math
 import time
 from dataclasses import dataclass, field
 
@@ -17,6 +18,9 @@ from app.core.config import settings
 from app.core.exceptions import ModelCallException
 
 MOCK_MODEL = "mock"
+
+# 字符数估算口径：约 1.5 个汉字 ≈ 1 token（英文单词更少字符，粗估足够用于统计）
+CHARS_PER_TOKEN = 1.5
 
 
 @dataclass(slots=True)
@@ -34,16 +38,44 @@ class ModelTarget:
     timeout: int = 10
 
 
-async def chat(question: str, target: ModelTarget) -> tuple[str, int]:
-    """调用模型，返回 (answer, latency_ms)；失败抛 ModelCallException"""
+@dataclass(slots=True)
+class ModelResult:
+    """一次模型调用的结果，直接对应 api_call_logs 需要落库的字段"""
+
+    answer: str
+    latency_ms: int
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    total_tokens: int = 0
+
+
+def estimate_tokens(text: str) -> int:
+    """按字符数粗估 token：mock 模型与上游未返回 usage 时的兜底口径"""
+    if not text:
+        return 0
+    return max(1, math.ceil(len(text) / CHARS_PER_TOKEN))
+
+
+async def chat(question: str, target: ModelTarget) -> ModelResult:
+    """调用模型，返回回答、耗时与 Token 用量；失败抛 ModelCallException"""
     started = time.perf_counter()
     if target.provider == MOCK_MODEL or target.name == MOCK_MODEL:
         answer = await _mock_answer(question)
+        prompt_tokens = estimate_tokens(question)
+        completion_tokens = estimate_tokens(answer)
     else:
-        answer = await _openai_compatible(question, target)
+        answer, prompt_tokens, completion_tokens = await _openai_compatible(
+            question, target
+        )
     # 取整到毫秒，写入 api_call_logs.latency_ms
     latency_ms = int((time.perf_counter() - started) * 1000)
-    return answer, latency_ms
+    return ModelResult(
+        answer=answer,
+        latency_ms=latency_ms,
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        total_tokens=prompt_tokens + completion_tokens,
+    )
 
 
 async def _mock_answer(question: str) -> str:
@@ -55,8 +87,11 @@ async def _mock_answer(question: str) -> str:
     return f"这是 mock 模型的回答：{question}（当前为本地联调模式，未调用真实大模型）"
 
 
-async def _openai_compatible(question: str, target: ModelTarget) -> str:
-    """真实模型分支：DeepSeek、本地 Ollama/vLLM、其他自定义服务共用此实现"""
+async def _openai_compatible(question: str, target: ModelTarget) -> tuple[str, int, int]:
+    """真实模型分支：DeepSeek、本地 Ollama/vLLM、其他自定义服务共用此实现
+
+    返回 (answer, prompt_tokens, completion_tokens)。
+    """
     url = (target.base_url or "").rstrip("/") + "/chat/completions"
     payload = {
         "model": target.upstream_model or target.name,
@@ -101,6 +136,14 @@ async def _openai_compatible(question: str, target: ModelTarget) -> str:
     # 上游把错误塞在 200 响应体里也时有发生，这里按"格式异常"兜底
     try:
         data = resp.json()
-        return data["choices"][0]["message"]["content"]
-    except (KeyError, IndexError, ValueError) as exc:
+        answer = data["choices"][0]["message"]["content"]
+    except (KeyError, IndexError, ValueError, TypeError) as exc:
         raise ModelCallException("模型返回格式异常，请确认服务为 OpenAI 兼容接口") from exc
+
+    # usage 是 Token 统计的权威来源；部分兼容服务不返回，按字符估算兜底
+    usage = data.get("usage") or {}
+    prompt_tokens = int(usage.get("prompt_tokens") or 0) or estimate_tokens(question)
+    completion_tokens = (
+        int(usage.get("completion_tokens") or 0) or estimate_tokens(answer)
+    )
+    return answer, prompt_tokens, completion_tokens
