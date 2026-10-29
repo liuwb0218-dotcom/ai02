@@ -1,0 +1,55 @@
+﻿<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>登录 · AI 智能问答平台</title>
+  <link rel="stylesheet" href="/static/style.css?v=7">
+</head>
+<body class="auth-body">
+  <div class="auth-shell">
+    <section class="auth-intro">
+      <div class="brand-mark large">AI</div>
+      <h1>AI 智能问答平台</h1>
+      <p>一个账号，多模型自由切换。注册后即可获得 7 天临时使用权，管理员审核通过后永久可用。</p>
+      <ul class="auth-points">
+        <li>内置 mock / DeepSeek / 本地模型</li>
+        <li>会话历史按账号隔离</li>
+        <li>支持自建模型配置</li>
+      </ul>
+    </section>
+
+    <section class="auth-panel">
+      <div class="auth-tabs" role="tablist">
+        <button class="auth-tab active" id="tabLogin" role="tab">登录</button>
+        <button class="auth-tab" id="tabRegister" role="tab">注册</button>
+      </div>
+
+      <form class="auth-form" id="authForm" autocomplete="on">
+        <label>用户名
+          <input id="username" name="username" autocomplete="username"
+                 placeholder="3~32 位字母、数字或下划线" required>
+        </label>
+        <label>密码
+          <input id="password" name="password" type="password" autocomplete="current-password"
+                 placeholder="至少 8 位" required>
+        </label>
+        <label id="confirmWrap" hidden>确认密码
+          <input id="confirmPassword" type="password" autocomplete="new-password"
+                 placeholder="再次输入密码">
+        </label>
+
+        <p class="auth-error" id="authError" hidden></p>
+        <button class="btn btn-primary auth-submit" id="submitBtn" type="submit">登录</button>
+      </form>
+
+      <p class="auth-tip" id="authTip">
+        还没有账号？<a href="#" id="switchLink">立即注册</a>
+      </p>
+      <p class="auth-note">注册后 7 天内可正常提问，到期未审核则需管理员通过后才能继续使用。</p>
+    </section>
+  </div>
+
+  <script src="/static/login.js"></script>
+</body>
+</html>

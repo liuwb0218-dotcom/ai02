@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import logging
 
-from sqlalchemy import func, select, text
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
@@ -48,19 +48,74 @@ async def init_db() -> None:
     logger.info("  ✓ 内置模型已同步")
 
     # 仅 dev 环境预置演示数据，生产不写入任何默认账号
+    await _seed_auth_users()
     if settings.is_dev:
         await _seed_demo_users()
 
 
-async def _seed_demo_users() -> None:
-    """dev 环境预置两个演示用户，保证 user_id=1/2 可做越权测试"""
+async def _seed_auth_users() -> None:
+    """确保内置超级管理员存在
+
+    已存在时只修正角色/状态，不覆盖已有密码（避免重启重置管理员密码）。
+    """
+    from app.core.security import hash_password
+
     factory = get_session_factory()
     async with factory() as db:  # type: AsyncSession
-        # 已有用户则跳过，避免每次重启重复插入（且 username 唯一约束会冲突）
-        count = await db.scalar(select(func.count()).select_from(User))
-        if count:
+        admin = await db.scalar(
+            select(User).where(User.username == settings.SUPER_ADMIN_USERNAME)
+        )
+        if admin is None:
+            db.add(User(
+                username=settings.SUPER_ADMIN_USERNAME,
+                password_hash=hash_password(settings.SUPER_ADMIN_PASSWORD),
+                role="super_admin",
+                status="active",
+            ))
+            await db.commit()
+            logger.info("  ✓ 已创建超级管理员: %s", settings.SUPER_ADMIN_USERNAME)
             return
+
+        changed = False
+        if admin.role != "super_admin":
+            admin.role = "super_admin"
+            changed = True
+        if admin.status != "active":
+            admin.status = "active"
+            admin.trial_expires_at = None
+            changed = True
+        if not admin.password_hash:
+            admin.password_hash = hash_password(settings.SUPER_ADMIN_PASSWORD)
+            changed = True
+        if changed:
+            await db.commit()
+            logger.info("  ✓ 已修正超级管理员配置: %s", admin.username)
+
+
+async def _seed_demo_users() -> None:
+    """dev 环境预置两个已审核演示用户，密码统一 demo1234
+
+    已有同名的演示用户时不覆盖，避免本地测试改过的密码被重置。
+    """
+    from app.core.security import hash_password
+
+    factory = get_session_factory()
+    async with factory() as db:  # type: AsyncSession
         for name in DEMO_USERS:
-            db.add(User(username=name))
+            user = await db.scalar(select(User).where(User.username == name))
+            if user is None:
+                db.add(User(
+                    username=name,
+                    password_hash=hash_password("demo1234"),
+                    role="user",
+                    status="active",
+                ))
+                continue
+            # 迁移前的旧演示用户没有密码，补齐后可直接登录联调
+            if not user.password_hash:
+                user.password_hash = hash_password("demo1234")
+            if user.status != "active":
+                user.status = "active"
+                user.trial_expires_at = None
         await db.commit()
-        logger.info("  ✓ 已预置演示用户: %s", ", ".join(DEMO_USERS))
+        logger.info("  ✓ 演示用户已就绪: %s（密码 demo1234）", ", ".join(DEMO_USERS))

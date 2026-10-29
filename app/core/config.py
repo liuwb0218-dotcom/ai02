@@ -48,6 +48,17 @@ class Settings(BaseSettings):
     JWT_ACCESS_EXPIRE_MINUTES: int = 30
     JWT_REFRESH_EXPIRE_DAYS: int = 7
 
+    # ── 账号与审批（P1）─────────────────────────────
+    # 内置超级管理员：首次启动自动创建，已存在时不覆盖密码
+    SUPER_ADMIN_USERNAME: str = "superadmin"
+    SUPER_ADMIN_PASSWORD: str = "Admin@123456"
+    # 注册后先给临时使用权，管理员审核通过才转为永久
+    REGISTER_TRIAL_DAYS: int = 7
+    # 仅开发环境可打开：注册即视为审核通过（跳过试用与审核流程）
+    AUTO_APPROVE_REGISTER: bool = False
+    # 是否强制登录。False 时允许旧的 X-User-Id 调试方式（仅本地联调）
+    AUTH_REQUIRED: bool = True
+
     # ── AES-256 加密 API Key 主密钥（P2）───────────
     MASTER_ENCRYPTION_KEY: str = "change_me_aes_key_32bytes_long!!!"
 
@@ -62,6 +73,12 @@ class Settings(BaseSettings):
 
     # ── 定时任务（P2）───────────────────────────────
     SOFT_DELETE_CLEANUP_DAYS: int = 30
+
+    # ── 日志（技术日志落文件 + 调用日志保留）──────────
+    LOG_DIR: str = "./logs"
+    LOG_LEVEL: str = "INFO"
+    # 文件日志与 api_call_logs 统一保留天数；audit_log 永久保留
+    LOG_RETENTION_DAYS: int = 30
 
     # ── 上传目录 ────────────────────────────────────
     UPLOAD_DIR: str = "./uploads"

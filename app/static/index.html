@@ -1,0 +1,212 @@
+﻿<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AI 智能问答平台</title>
+  <link rel="stylesheet" href="/static/style.css?v=7">
+</head>
+<body>
+  <div class="app">
+    <!-- ── 左侧栏：历史会话 + 用户切换 + 模型管理入口 ── -->
+    <aside class="sidebar" id="sidebar">
+      <div class="brand">
+        <span class="brand-mark">AI</span>
+        <div class="brand-text">
+          <strong>智能问答</strong>
+          <small>模型自由切换</small>
+        </div>
+      </div>
+
+      <button class="btn new-chat" id="newChatBtn">
+        <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
+          <path d="M12 5v14M5 12h14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+        </svg>
+        新建对话
+      </button>
+
+      <div class="history-title">
+        <span>历史记录</span>
+        <span class="count" id="historyCount">0</span>
+      </div>
+      <ul class="history-list" id="historyList"></ul>
+
+      <div class="sidebar-foot">
+        <div class="user-card" id="userCard">
+          <span class="user-avatar" id="userAvatar">U</span>
+          <div class="user-meta">
+            <strong id="userName">加载中</strong>
+            <span class="role-badge" id="roleBadge">user</span>
+          </div>
+        </div>
+        <button class="btn ghost" id="openModelBtn">模型管理</button>
+        <button class="btn ghost" id="openUsageBtn">使用统计</button>
+        <a class="btn ghost" id="workspaceBtn" href="/me">我的数据</a>
+        <button class="btn ghost danger-text" id="logoutBtn">退出登录</button>
+      </div>
+    </aside>
+    <div class="scrim" id="scrim"></div>
+
+    <!-- ── 主区域：顶部模型选择 + 消息流 + 输入框 ── -->
+    <main class="main">
+      <header class="topbar">
+        <button class="icon-btn menu-btn" id="menuBtn" title="展开侧栏" aria-label="展开侧栏">
+          <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+            <path d="M4 7h16M4 12h16M4 17h16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+          </svg>
+        </button>
+        <div class="topbar-left">
+          <span class="field-label">模型</span>
+          <select class="select model-select" id="modelSelect" aria-label="选择模型"></select>
+        </div>
+        <div class="topbar-right">
+          <span class="status-dot" id="statusDot"></span>
+          <span id="statusText">就绪</span>
+        </div>
+      </header>
+
+      <div class="trial-banner" id="trialBanner" hidden></div>
+
+      <section class="messages" id="messages">
+        <div class="empty" id="emptyState">
+          <div class="empty-logo">AI</div>
+          <h1>AI 智能问答平台</h1>
+          <p>选择模型后直接提问，回答会保存到左侧历史记录，可随时删除。</p>
+          <div class="chips" id="chips">
+            <button class="chip">用一个例子解释什么是 RAG</button>
+            <button class="chip">帮我写一段 Python 快速排序</button>
+            <button class="chip">DeepSeek 和本地模型的区别？</button>
+          </div>
+        </div>
+      </section>
+
+      <footer class="composer">
+        <div class="composer-box">
+          <textarea id="questionInput" rows="1"
+                    placeholder="输入问题，Enter 发送，Shift + Enter 换行"></textarea>
+          <button class="send-btn" id="sendBtn" title="发送" aria-label="发送">
+            <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+              <path d="M12 19V5M6 11l6-6 6 6" fill="none" stroke="currentColor"
+                    stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+          </button>
+        </div>
+        <p class="hint">回答由所选模型生成，调用失败会显示错误码与 request_id</p>
+      </footer>
+    </main>
+  </div>
+
+  <!-- ── 模型管理弹窗 ── -->
+  <div class="modal" id="modelModal" aria-hidden="true">
+    <div class="modal-mask" data-close></div>
+    <div class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+      <header class="modal-head">
+        <h2 id="modalTitle">模型管理</h2>
+        <button class="icon-btn" data-close title="关闭" aria-label="关闭">
+          <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+            <path d="M6 6l12 12M18 6L6 18" fill="none" stroke="currentColor"
+                  stroke-width="2" stroke-linecap="round"/>
+          </svg>
+        </button>
+      </header>
+
+      <div class="modal-body">
+        <div class="model-toolbar">
+          <p class="muted">内置模型由 .env 配置、不可修改；自建模型仅当前用户可见可用。</p>
+          <button class="btn btn-primary" id="addModelBtn">新增模型</button>
+        </div>
+
+        <ul class="model-list" id="modelList"></ul>
+
+        <form class="model-form" id="modelForm" hidden>
+          <h3 id="formTitle">新增模型</h3>
+          <div class="grid">
+            <label>标识 name
+              <input id="fName" placeholder="my-ollama" autocomplete="off">
+            </label>
+            <label>展示名称
+              <input id="fDisplay" placeholder="我的 Ollama" autocomplete="off">
+            </label>
+            <label>类型
+              <select id="fProvider">
+                <option value="local">local（本地服务）</option>
+                <option value="deepseek">deepseek</option>
+                <option value="custom">custom（其他兼容接口）</option>
+              </select>
+            </label>
+            <label>上游模型名
+              <input id="fUpstream" placeholder="qwen2.5:7b" autocomplete="off">
+            </label>
+            <label class="span2">服务地址 base_url
+              <input id="fBaseUrl" placeholder="http://127.0.0.1:11434/v1" autocomplete="off">
+            </label>
+            <label class="span2">API Key（本地模型可留空，编辑时留空表示不修改）
+              <input id="fApiKey" type="password" autocomplete="new-password" placeholder="sk-...">
+            </label>
+          </div>
+          <div class="form-actions">
+            <button type="button" class="btn" id="cancelFormBtn">取消</button>
+            <button type="submit" class="btn btn-primary" id="saveModelBtn">保存</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── 使用统计弹窗：当前用户的调用汇总与最近记录 ── -->
+  <div class="modal" id="usageModal" aria-hidden="true">
+    <div class="modal-mask" data-usage-close></div>
+    <div class="modal-panel usage-panel" role="dialog" aria-modal="true"
+         aria-labelledby="usageTitle">
+      <header class="modal-head">
+        <h2 id="usageTitle">我的使用统计</h2>
+        <button class="icon-btn" data-usage-close title="关闭" aria-label="关闭">
+          <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+            <path d="M6 6l12 12M18 6L6 18" fill="none" stroke="currentColor"
+                  stroke-width="2" stroke-linecap="round"/>
+          </svg>
+        </button>
+      </header>
+
+      <p class="muted">统计最近 30 天的模型调用，只展示元信息，不包含提问与回答内容。</p>
+
+      <section class="stat-grid usage-stats">
+        <article class="stat-card"><span>调用次数</span><strong id="usageCalls">0</strong></article>
+        <article class="stat-card ok"><span>成功率</span><strong id="usageRate">0%</strong></article>
+        <article class="stat-card muted"><span>平均耗时</span><strong id="usageLatency">0 ms</strong></article>
+        <article class="stat-card"><span>Token 消耗</span><strong id="usageTokens">0</strong></article>
+      </section>
+
+      <ul class="usage-list" id="usageList"></ul>
+      <p class="admin-empty" id="usageEmpty" hidden>最近 30 天还没有调用记录</p>
+    </div>
+  </div>
+
+  <!-- ── 公告弹窗：登录后自动弹出，关闭只对本次登录生效 ── -->
+  <div class="modal announce-modal" id="announceModal" aria-hidden="true">
+    <div class="modal-mask" data-announce-close></div>
+    <div class="modal-panel announce-panel" role="dialog" aria-modal="true"
+         aria-labelledby="announceTitle">
+      <header class="modal-head">
+        <h2 id="announceTitle">平台公告</h2>
+        <button class="icon-btn" data-announce-close title="稍后再说" aria-label="关闭">
+          <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+            <path d="M6 6l12 12M18 6L6 18" fill="none" stroke="currentColor"
+                  stroke-width="2" stroke-linecap="round"/>
+          </svg>
+        </button>
+      </header>
+      <p class="muted" id="announceHint">请阅读以下公告，点击「知道了」后本次登录不再提示。</p>
+      <ul class="announce-list" id="announceList"></ul>
+      <footer class="announce-foot">
+        <button class="btn" data-announce-close>稍后再说</button>
+        <button class="btn btn-primary" id="announceAllRead">全部知道了</button>
+      </footer>
+    </div>
+  </div>
+
+  <div class="toasts" id="toasts"></div>
+  <script src="/static/auth-client.js"></script>
+  <script src="/static/app.js?v=7"></script>
+</body>
+</html>

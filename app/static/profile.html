@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>我的数据 · AI 智能问答平台</title>
+  <link rel="stylesheet" href="/static/style.css?v=7">
+</head>
+<body class="admin-body">
+  <header class="admin-header">
+    <div class="admin-brand">
+      <span class="brand-mark">AI</span>
+      <div>
+        <strong>我的数据</strong>
+        <small>账号信息、调用统计与历史会话</small>
+      </div>
+    </div>
+    <div class="admin-header-right">
+      <span class="user-chip" id="profileUserChip">-</span>
+      <a class="btn ghost" href="/">返回问答</a>
+      <button class="btn ghost danger-text" id="profileLogout">退出登录</button>
+    </div>
+  </header>
+
+  <main class="admin-main">
+    <!-- ── 账号信息 ── -->
+    <section class="profile-card">
+      <h2>账号信息</h2>
+      <dl class="profile-fields">
+        <div><dt>用户名</dt><dd id="profileName">-</dd></div>
+        <div><dt>角色</dt><dd id="profileRole">-</dd></div>
+        <div><dt>账号状态</dt><dd id="profileStatus">-</dd></div>
+        <div><dt>注册时间</dt><dd id="profileCreated">-</dd></div>
+        <div><dt>最近登录</dt><dd id="profileLastLogin">-</dd></div>
+        <div><dt>可用期限</dt><dd id="profileTrial">-</dd></div>
+      </dl>
+    </section>
+
+    <!-- ── 近 30 天统计 ── -->
+    <section class="stat-grid">
+      <article class="stat-card"><span>近 30 天调用</span><strong id="statCalls">0</strong></article>
+      <article class="stat-card ok"><span>成功率</span><strong id="statRate">0%</strong></article>
+      <article class="stat-card muted"><span>平均耗时</span><strong id="statLatency">0 ms</strong></article>
+      <article class="stat-card"><span>Token 消耗</span><strong id="statTokens">0</strong></article>
+    </section>
+
+    <!-- ── 最近调用 ── -->
+    <h2 class="profile-section-title">最近调用记录</h2>
+    <section class="admin-table-wrap">
+      <table class="admin-table">
+        <thead>
+          <tr>
+            <th>时间</th>
+            <th>模型</th>
+            <th>状态</th>
+            <th>耗时</th>
+            <th>Prompt</th>
+            <th>Completion</th>
+            <th>Total</th>
+            <th>错误信息</th>
+          </tr>
+        </thead>
+        <tbody id="profileLogRows"></tbody>
+      </table>
+      <p class="admin-empty" id="profileLogEmpty" hidden>最近还没有模型调用记录</p>
+    </section>
+
+    <!-- ── 历史会话 ── -->
+    <h2 class="profile-section-title">最近问答</h2>
+    <section class="admin-table-wrap">
+      <table class="admin-table">
+        <thead>
+          <tr>
+            <th>时间</th>
+            <th>问题</th>
+            <th>回答摘要</th>
+            <th>模型</th>
+          </tr>
+        </thead>
+        <tbody id="profileHistoryRows"></tbody>
+      </table>
+      <p class="admin-empty" id="profileHistoryEmpty" hidden>还没有问答记录</p>
+    </section>
+  </main>
+
+  <div class="toasts" id="toasts"></div>
+
+  <script src="/static/auth-client.js"></script>
+  <script src="/static/profile.js"></script>
+</body>
+</html>

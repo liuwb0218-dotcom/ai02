@@ -1,0 +1,304 @@
+﻿<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>管理后台 · AI 智能问答平台</title>
+  <link rel="stylesheet" href="/static/style.css?v=7">
+</head>
+<body class="admin-body">
+  <!-- ── 非管理员访问时显示的提示页（默认隐藏） ── -->
+  <section class="denied" id="adminDenied" hidden>
+    <div class="denied-card">
+      <span class="brand-mark">AI</span>
+      <h1>无权限访问</h1>
+      <p class="muted">管理后台仅对管理员开放，当前账号没有访问权限。</p>
+      <div class="denied-actions">
+        <a class="btn btn-primary" href="/me">去我的数据</a>
+        <a class="btn ghost" href="/">返回问答页</a>
+      </div>
+    </div>
+  </section>
+
+  <div id="adminApp">
+  <header class="admin-header">
+    <div class="admin-brand">
+      <span class="brand-mark">AI</span>
+      <div>
+        <strong>管理后台</strong>
+        <small>用户审核、公告与调用日志</small>
+      </div>
+    </div>
+    <div class="admin-header-right">
+      <span class="user-chip" id="adminUserName">-</span>
+      <a class="btn ghost" href="/">返回问答</a>
+      <button class="btn ghost danger-text" id="adminLogout">退出登录</button>
+    </div>
+  </header>
+
+  <main class="admin-main">
+    <nav class="admin-tabs">
+      <button class="admin-tab active" id="tabUsers" data-tab="users">用户审核</button>
+      <button class="admin-tab" id="tabGroups" data-tab="groups" hidden>分组</button>
+      <button class="admin-tab" id="tabAnnouncements" data-tab="announcements">公告管理</button>
+      <button class="admin-tab" id="tabLogs" data-tab="logs">调用日志</button>
+    </nav>
+
+    <!-- ══════════ 用户审核 ══════════ -->
+    <section class="admin-panel" id="usersPanel">
+      <section class="stat-grid">
+        <article class="stat-card"><span>待审核</span><strong id="statPending">0</strong></article>
+        <article class="stat-card ok"><span>已审核</span><strong id="statActive">0</strong></article>
+        <article class="stat-card danger"><span>已禁用</span><strong id="statDisabled">0</strong></article>
+        <article class="stat-card muted"><span>用户总数</span><strong id="statTotal">0</strong></article>
+      </section>
+
+      <section class="admin-toolbar">
+        <div class="admin-filters" id="managedFilterBar" hidden>
+          <span class="filter-chip" id="managedFilterText">未分配</span>
+          <button class="btn ghost" id="clearManagedFilter">查看全部</button>
+        </div>
+        <div class="admin-filters">
+          <select class="select" id="statusFilter">
+            <option value="pending">待审核</option>
+            <option value="active">已审核</option>
+            <option value="disabled">已禁用</option>
+            <option value="">全部用户</option>
+          </select>
+          <input class="select admin-search" id="keyword" placeholder="搜索用户名">
+          <button class="btn" id="searchBtn">查询</button>
+        </div>
+        <div class="admin-bulk">
+          <span class="muted" id="selectedTip">未选择</span>
+          <button class="btn btn-primary" id="batchApprove" disabled>批量通过</button>
+          <button class="btn danger" id="batchReject" disabled>批量拒绝</button>
+        </div>
+      </section>
+
+      <section class="admin-table-wrap">
+        <table class="admin-table">
+          <thead>
+            <tr>
+              <th class="col-check"><input type="checkbox" id="checkAll" aria-label="全选"></th>
+              <th>用户</th>
+              <th>角色</th>
+              <th>归属</th>
+              <th>状态</th>
+              <th>试用 / 禁用说明</th>
+              <th>注册时间</th>
+              <th>最近登录</th>
+              <th class="col-actions">操作</th>
+            </tr>
+          </thead>
+          <tbody id="userRows"></tbody>
+        </table>
+        <p class="admin-empty" id="adminEmpty" hidden>没有符合条件的用户</p>
+      </section>
+
+      <footer class="admin-pager">
+        <span class="muted" id="pageInfo">第 1 页</span>
+        <div>
+          <button class="btn" id="prevPage">上一页</button>
+          <button class="btn" id="nextPage">下一页</button>
+        </div>
+      </footer>
+    </section>
+
+    <!-- ══════════ 分组视图（仅超管） ══════════ -->
+    <section class="admin-panel" id="groupsPanel" hidden>
+      <section class="stat-grid">
+        <article class="stat-card"><span>管理员</span><strong id="groupManagers">0</strong></article>
+        <article class="stat-card ok"><span>已分配用户</span><strong id="groupAssigned">0</strong></article>
+        <article class="stat-card muted"><span>未分配</span><strong id="groupUnassigned">0</strong></article>
+        <article class="stat-card danger"><span>未分配待审核</span><strong id="groupUnassignedPending">0</strong></article>
+      </section>
+
+      <section class="admin-toolbar">
+        <div class="admin-filters">
+          <span class="muted">新用户按注册顺序轮询分配；管理员被撤销或禁用后，组内用户转给人数最少的管理员。</span>
+        </div>
+      </section>
+
+      <section class="admin-table-wrap">
+        <table class="admin-table">
+          <thead>
+            <tr>
+              <th>管理员</th>
+              <th>已审核</th>
+              <th>待审核</th>
+              <th>已禁用</th>
+              <th>合计</th>
+              <th class="col-actions">操作</th>
+            </tr>
+          </thead>
+          <tbody id="groupRows"></tbody>
+        </table>
+        <p class="admin-empty" id="groupEmpty" hidden>还没有管理员，先到「用户审核」把用户设为管理员</p>
+      </section>
+    </section>
+
+    <!-- ══════════ 公告管理 ══════════ -->
+    <section class="admin-panel" id="announcePanel" hidden>
+      <section class="admin-toolbar">
+        <div class="admin-filters">
+          <select class="select" id="annStatusFilter">
+            <option value="">全部公告</option>
+            <option value="published">已发布</option>
+            <option value="draft">草稿</option>
+            <option value="revoked">已撤回</option>
+          </select>
+          <input class="select admin-search" id="annKeyword" placeholder="搜索公告标题">
+          <button class="btn" id="annSearchBtn">查询</button>
+        </div>
+        <div class="admin-bulk">
+          <span class="muted" id="annSummary">共 0 条 · 0 位用户</span>
+          <button class="btn btn-primary" id="newAnnBtn">发布公告</button>
+        </div>
+      </section>
+
+      <section class="admin-table-wrap">
+        <table class="admin-table">
+          <thead>
+            <tr>
+              <th>公告</th>
+              <th>级别</th>
+              <th>状态</th>
+              <th>生效时间</th>
+              <th>到期时间</th>
+              <th>已读人数</th>
+              <th>发布人</th>
+              <th class="col-actions">操作</th>
+            </tr>
+          </thead>
+          <tbody id="annRows"></tbody>
+        </table>
+        <p class="admin-empty" id="annEmpty" hidden>还没有公告，点击右上角「发布公告」</p>
+      </section>
+
+      <footer class="admin-pager">
+        <span class="muted" id="annPageInfo">第 1 页</span>
+        <div>
+          <button class="btn" id="annPrevPage">上一页</button>
+          <button class="btn" id="annNextPage">下一页</button>
+        </div>
+      </footer>
+    </section>
+
+    <!-- ══════════ 调用日志 ══════════ -->
+    <section class="admin-panel" id="logsPanel" hidden>
+      <section class="admin-toolbar">
+        <div class="admin-filters">
+          <input class="select admin-search admin-search-sm" id="logUser" type="number"
+                 min="1" placeholder="用户 ID（空为全部）">
+          <select class="select" id="logStatusFilter">
+            <option value="">全部状态</option>
+            <option value="success">成功</option>
+            <option value="error">失败</option>
+          </select>
+          <input class="select admin-search" id="logModel" placeholder="模型标识，如 mock">
+          <select class="select" id="logDays">
+            <option value="">全部时间</option>
+            <option value="7">最近 7 天</option>
+            <option value="30" selected>最近 30 天</option>
+            <option value="90">最近 90 天</option>
+          </select>
+          <button class="btn" id="logSearchBtn">查询</button>
+        </div>
+        <div class="admin-bulk">
+          <span class="muted" id="logSummary">共 0 条</span>
+        </div>
+      </section>
+
+      <section class="admin-table-wrap">
+        <table class="admin-table">
+          <thead>
+            <tr>
+              <th>时间</th>
+              <th>用户</th>
+              <th>模型</th>
+              <th>状态</th>
+              <th>耗时</th>
+              <th>Prompt</th>
+              <th>Completion</th>
+              <th>Total</th>
+              <th>错误信息</th>
+            </tr>
+          </thead>
+          <tbody id="logRows"></tbody>
+        </table>
+        <p class="admin-empty" id="logEmpty" hidden>没有符合条件的调用记录</p>
+      </section>
+
+      <footer class="admin-pager">
+        <span class="muted" id="logPageInfo">第 1 页</span>
+        <div>
+          <button class="btn" id="logPrevPage">上一页</button>
+          <button class="btn" id="logNextPage">下一页</button>
+        </div>
+      </footer>
+    </section>
+  </main>
+  </div>
+
+  <!-- ── 公告编辑弹窗 ── -->
+  <div class="modal" id="annModal" aria-hidden="true">
+    <div class="modal-mask" data-ann-close></div>
+    <div class="modal-panel modal-narrow" role="dialog" aria-modal="true"
+         aria-labelledby="annModalTitle">
+      <header class="modal-head">
+        <h2 id="annModalTitle">发布公告</h2>
+        <button class="icon-btn" data-ann-close title="关闭" aria-label="关闭">
+          <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+            <path d="M6 6l12 12M18 6L6 18" fill="none" stroke="currentColor"
+                  stroke-width="2" stroke-linecap="round"/>
+          </svg>
+        </button>
+      </header>
+
+      <form class="model-form" id="annForm" style="border-top:0;padding-top:0;margin-top:8px">
+        <div class="grid">
+          <label class="span2">标题（最多 100 字）
+            <input id="annTitle" maxlength="100" autocomplete="off"
+                   placeholder="例如：今晚 22:00 系统维护">
+          </label>
+          <label class="span2">正文（最多 2000 字，支持换行，不解析 HTML）
+            <textarea id="annContent" maxlength="2000" rows="6"
+                      placeholder="请填写公告内容"></textarea>
+          </label>
+          <label>级别
+            <select id="annLevel">
+              <option value="info">公告（普通）</option>
+              <option value="warning">重要</option>
+              <option value="critical">紧急</option>
+            </select>
+          </label>
+          <label>发布方式
+            <select id="annPublishMode">
+              <option value="now">立即发布</option>
+              <option value="schedule">定时发布</option>
+              <option value="draft">存为草稿</option>
+            </select>
+          </label>
+          <label>生效时间（定时发布时填写）
+            <input id="annPublishAt" type="datetime-local">
+          </label>
+          <label>到期时间（留空表示长期有效）
+            <input id="annExpireAt" type="datetime-local">
+          </label>
+        </div>
+        <p class="assign-note" id="annFormTip">
+          发布后所有可登录用户下次进入页面时都会看到弹窗；撤回后立即不再弹出。
+        </p>
+        <div class="form-actions">
+          <button type="button" class="btn" data-ann-close>取消</button>
+          <button type="submit" class="btn btn-primary" id="annSaveBtn">发布</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <div class="toasts" id="toasts"></div>
+  <script src="/static/auth-client.js"></script>
+  <script src="/static/admin.js?v=7"></script>
+</body>
+</html>
