@@ -39,6 +39,21 @@ class AuthenticationException(AppException):
     status_code = 401
 
 
+class AccountDisabledException(AppException):
+    """账号被管理员禁用，detail 中带禁用原因与到期时间"""
+
+    code = "ACCOUNT_DISABLED"
+    status_code = 403
+
+
+class TrialExpiredException(AppException):
+    """注册后的 7 天试用期已结束且尚未通过审核：可登录，但禁止发起问答"""
+
+    code = "TRIAL_EXPIRED"
+    status_code = 403
+
+
+
 class PermissionDeniedException(AppException):
     """已登录但越权访问他人资源"""
 

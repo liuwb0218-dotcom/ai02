@@ -17,19 +17,107 @@ NOW = text("(datetime('now','localtime'))")
 
 
 class User(Base):
-    """用户表 — 支撑 user_id 会话隔离
+    """用户表 — 登录凭据、角色与审核状态
 
-    P0 仅保存最小信息；P1 增加 password_hash / status / role 等字段。
+    三层角色：super_admin（内置超管）/ admin（管理员）/ user（普通用户）。
+    审核状态：pending（待审核，7 天试用）/ active（已审核，永久）/ disabled（禁用）。
     """
 
     __tablename__ = "users"
+    __table_args__ = (
+        CheckConstraint("role IN ('super_admin','admin','user')",
+                        name="ck_user_role"),
+        CheckConstraint("status IN ('pending','active','disabled')",
+                        name="ck_user_status"),
+        Index("idx_user_role", "role"),
+        Index("idx_user_status", "status"),
+        Index("idx_user_managed_by", "managed_by"),
+    )
 
     # 主键：自增整数，会话表通过 user_id 外键关联
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     # 用户名：唯一约束，注册接口据此判重
     username: Mapped[str] = mapped_column(Text, unique=True, nullable=False)
+    # bcrypt 哈希；空字符串表示该账号尚未设置密码（如迁移前的演示用户）
+    password_hash: Mapped[str] = mapped_column(
+        Text, nullable=False, server_default=text("''")
+    )
+    # 角色：决定可访问的接口范围
+    role: Mapped[str] = mapped_column(
+        Text, nullable=False, server_default=text("'user'")
+    )
+    # 状态：pending=待审核（试用期）/ active=已审核 / disabled=禁用
+    status: Mapped[str] = mapped_column(
+        Text, nullable=False, server_default=text("'pending'")
+    )
+    # 归属管理员：普通用户审核通过时按顺序轮询分配；管理员与超管为 NULL
+    managed_by: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # 试用到期时间：仅 pending 有效；审核通过后允许为空表示永久
+    trial_expires_at: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # 禁用到期时间：为空表示永久禁用（由管理员手动恢复）
+    disabled_until: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # 禁用原因（对用户可见的提示文案）
+    disabled_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # 最近一次登录时间
+    last_login_at: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Token 版本：+1 后旧 access/refresh 全部失效（禁用、改密、全端登出）
+    token_version: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("0")
+    )
     # 创建时间：数据库侧默认值，插入时无需应用传入
     created_at: Mapped[str] = mapped_column(Text, nullable=False, server_default=NOW)
+
+
+class UserToken(Base):
+    """Refresh Token 白名单 — 只存 SHA-256，不落明文
+
+    签发时写入一条；刷新时校验并轮换（旧记录置 revoked_at）；
+    登出/禁用/改密时批量置 revoked_at，或直接提升 users.token_version。
+    """
+
+    __tablename__ = "user_tokens"
+    __table_args__ = (
+        Index("idx_token_user", "user_id"),
+        Index("idx_token_hash", "token_hash"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("users.id"), nullable=False
+    )
+    # refresh token 的 SHA-256 十六进制串，数据库泄露也无法直接复用
+    token_hash: Mapped[str] = mapped_column(Text, unique=True, nullable=False)
+    expires_at: Mapped[str] = mapped_column(Text, nullable=False)
+    revoked_at: Mapped[str | None] = mapped_column(Text, nullable=True)
+    user_agent: Mapped[str | None] = mapped_column(Text, nullable=True)
+    ip: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[str] = mapped_column(Text, nullable=False, server_default=NOW)
+
+
+class AuditLog(Base):
+    """管理员操作审计 — 审核、启用、禁用、改角色都留痕
+
+    before_state / after_state 仅保存 status/role/disabled_reason 等非敏感字段。
+    """
+
+    __tablename__ = "audit_log"
+    __table_args__ = (
+        Index("idx_audit_operator", "operator_id", "created_at"),
+        Index("idx_audit_target", "target_type", "target_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    # 操作人管理员 ID（不设外键：管理员账号删除后仍需可追溯）
+    operator_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    # 动作：approve / reject / enable / disable
+    action: Mapped[str] = mapped_column(Text, nullable=False)
+    target_type: Mapped[str] = mapped_column(Text, nullable=False)
+    target_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    before_state: Mapped[str | None] = mapped_column(Text, nullable=True)
+    after_state: Mapped[str | None] = mapped_column(Text, nullable=True)
+    ip: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[str] = mapped_column(Text, nullable=False, server_default=NOW)
+
 
 
 class ChatSession(Base):
@@ -93,6 +181,19 @@ class APILog(Base):
     status: Mapped[str] = mapped_column(Text, nullable=False)
     # 端到端耗时（毫秒）；失败时记 0
     latency_ms: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("0")
+    )
+    # ── Token 用量：真实模型取上游 usage，mock 按字符估算，失败时为 0 ──
+    # 提问消耗的 token
+    prompt_tokens: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("0")
+    )
+    # 回答消耗的 token
+    completion_tokens: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("0")
+    )
+    # 合计 = prompt + completion
+    total_tokens: Mapped[int] = mapped_column(
         Integer, nullable=False, server_default=text("0")
     )
     # 失败原因（如"模型调用超时"）；成功时为 NULL

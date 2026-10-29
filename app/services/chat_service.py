@@ -29,9 +29,9 @@ async def ask(db: AsyncSession, req: ChatRequest) -> ChatResponse:
 
     # 4) 调模型：超时/连接失败/上游 4xx 5xx 统一抛 502
     try:
-        answer, latency_ms = await llm_client.chat(question, target)
+        result = await llm_client.chat(question, target)
     except ModelCallException as exc:
-        # 失败也要留调用日志，session_id 为空（此时还没有会话记录）
+        # 失败也要留调用日志，session_id 为空（此时还没有会话记录），Token 记 0
         await _write_log(db, req.user_id, None, req.model_name,
                          "error", 0, str(exc.message))
         raise
@@ -41,13 +41,16 @@ async def ask(db: AsyncSession, req: ChatRequest) -> ChatResponse:
         user_id=req.user_id,
         model_name=req.model_name,
         question=question,
-        answer=answer,
+        answer=result.answer,
     )
     db.add(session)
     try:
         await db.flush()                      # 拿到自增 session_id
         await _write_log(db, req.user_id, session.id, req.model_name,
-                         "success", latency_ms, None)
+                         "success", result.latency_ms, None,
+                         prompt_tokens=result.prompt_tokens,
+                         completion_tokens=result.completion_tokens,
+                         total_tokens=result.total_tokens)
         await db.commit()
     except SQLAlchemyError as exc:
         # 会话与日志在同一事务中，任一失败整体回滚，避免数据不一致
@@ -57,16 +60,21 @@ async def ask(db: AsyncSession, req: ChatRequest) -> ChatResponse:
 
     return ChatResponse(
         session_id=session.id,
-        answer=answer,
+        answer=result.answer,
         model_name=req.model_name,
-        latency_ms=latency_ms,
+        latency_ms=result.latency_ms,
         status="success",
+        prompt_tokens=result.prompt_tokens,
+        completion_tokens=result.completion_tokens,
+        total_tokens=result.total_tokens,
     )
 
 
 async def _write_log(db: AsyncSession, user_id: int, session_id: int | None,
                      model_name: str, status: str, latency_ms: int,
-                     error_message: str | None) -> None:
+                     error_message: str | None,
+                     prompt_tokens: int = 0, completion_tokens: int = 0,
+                     total_tokens: int = 0) -> None:
     """写一条模型调用日志，成功与失败都调用
 
     error 分支先单独 commit：即使随后异常向上抛出，日志也不会因事务回滚而丢失。
@@ -77,6 +85,9 @@ async def _write_log(db: AsyncSession, user_id: int, session_id: int | None,
         model_name=model_name,
         status=status,
         latency_ms=latency_ms,
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        total_tokens=total_tokens,
         error_message=error_message,
     ))
     await db.commit()

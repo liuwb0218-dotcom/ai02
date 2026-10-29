@@ -10,10 +10,13 @@ from pydantic import BaseModel, Field
 
 
 class ChatRequest(BaseModel):
-    """问答请求体"""
+    """问答请求体
+
+    user_id 仅为兼容旧客户端保留：服务端一律以登录 Token 中的用户为准。
+    """
 
     # gt=0：用户 ID 必须为正整数，0 或负数属于非法参数
-    user_id: int = Field(..., gt=0, description="用户 ID")
+    user_id: int | None = Field(None, gt=0, description="兼容字段，登录后由服务端覆盖")
     # 长度上限 2000：防止超长文本撑爆上下文与日志表
     question: str = Field(..., min_length=1, max_length=2000, description="用户问题")
     # 默认 mock：本地联调无需配置 Key 即可跑通链路
@@ -28,6 +31,9 @@ class ChatResponse(BaseModel):
     model_name: str = Field(..., description="实际使用的模型")
     latency_ms: int = Field(..., description="模型调用耗时（毫秒）")
     status: str = Field(..., description="固定 success，失败走异常响应")
+    prompt_tokens: int = Field(0, description="提问消耗的 token")
+    completion_tokens: int = Field(0, description="回答消耗的 token")
+    total_tokens: int = Field(0, description="合计 token")
 
 
 class HistoryItem(BaseModel):

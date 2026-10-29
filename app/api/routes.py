@@ -5,11 +5,12 @@
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Header, Query
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.config import settings
+from app.api.deps import get_current_user, get_optional_user
 from app.database.session import get_db
+from app.models.conversation import User
 from app.schemas.chat import (
     ChatRequest,
     ChatResponse,
@@ -24,7 +25,7 @@ from app.schemas.model_config import (
     ModelsResponse,
     ModelTestResponse,
 )
-from app.services import chat_service, history_service, model_config_service
+from app.services import chat_service, history_service, model_config_service, user_service
 
 router = APIRouter()
 
@@ -45,27 +46,32 @@ async def health() -> dict[str, str]:
 
 @router.get("/api/models", tags=["chat"], response_model=ModelsResponse)
 async def list_models(
-    user_id: int | None = Query(None, gt=0, description="传入后额外返回该用户的自建模型"),
+    user_id: int | None = Query(None, gt=0, description="兼容旧调用；登录后忽略此参数"),
+    include_disabled: bool = Query(False, description="true 时额外返回已停用配置（模型管理页用）"),
+    current_user: User | None = Depends(get_optional_user),
     db: AsyncSession = Depends(get_db),
 ) -> ModelsResponse:
-    """返回可切换的模型列表：内置模型 + 该用户自建模型
-
-    不传 user_id 时只返回内置模型（mock / DeepSeek / 本地模型）。
-    """
-    return ModelsResponse(models=await model_config_service.list_for_user(db, user_id))
+    """返回可切换的模型列表：内置模型 + 当前用户自建模型"""
+    effective_user_id = current_user.id if current_user else user_id
+    return ModelsResponse(
+        models=await model_config_service.list_for_user(
+            db, effective_user_id, include_disabled=include_disabled
+        )
+    )
 
 
 @router.post("/api/models", tags=["models"], response_model=ModelConfigResponse)
 async def create_model(
     req: ModelConfigCreate,
-    x_user_id: int | None = Header(None, alias="X-User-Id"),
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> ModelConfigResponse:
-    """新增用户自建模型配置（如接入公司内网模型、其他厂商 API）
+    """新增用户自建模型配置（归属当前登录用户）
 
     失败语义：重名 409 / 参数非法 422 / 越权 403
     """
-    return await model_config_service.create(db, req, current_user_id=x_user_id)
+    req = req.model_copy(update={"user_id": current_user.id})
+    return await model_config_service.create(db, req, current_user_id=current_user.id)
 
 
 @router.patch("/api/models/{config_id}", tags=["models"],
@@ -73,23 +79,24 @@ async def create_model(
 async def update_model(
     config_id: int,
     req: ModelConfigUpdate,
-    x_user_id: int | None = Header(None, alias="X-User-Id"),
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> ModelConfigResponse:
     """修改自建模型配置：支持改地址、模型名、Key、启停；内置模型禁止修改"""
     return await model_config_service.update(db, config_id, req,
-                                             current_user_id=x_user_id)
+                                             current_user_id=current_user.id)
 
 
 @router.delete("/api/models/{config_id}", tags=["models"],
                response_model=DeleteModelResponse)
 async def delete_model(
     config_id: int,
-    x_user_id: int | None = Header(None, alias="X-User-Id"),
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> DeleteModelResponse:
     """删除自建模型配置；内置模型不可删除（可停用）"""
-    await model_config_service.delete(db, config_id, current_user_id=x_user_id)
+    await model_config_service.delete(db, config_id,
+                                      current_user_id=current_user.id)
     return DeleteModelResponse(deleted=True, id=config_id)
 
 
@@ -97,11 +104,12 @@ async def delete_model(
              response_model=ModelTestResponse)
 async def test_model(
     config_id: int,
-    x_user_id: int | None = Header(None, alias="X-User-Id"),
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> ModelTestResponse:
     """连通性测试：用一句固定提问验证地址/Key/模型名是否正确"""
-    return await model_config_service.test(db, config_id, current_user_id=x_user_id)
+    return await model_config_service.test(db, config_id,
+                                           current_user_id=current_user.id)
 
 
 # ═══════════════════════════════════════════════════
@@ -109,14 +117,21 @@ async def test_model(
 # ═══════════════════════════════════════════════════
 
 @router.post("/api/chat", tags=["chat"], response_model=ChatResponse)
-async def chat(req: ChatRequest, db: AsyncSession = Depends(get_db)) -> ChatResponse:
-    """单轮问答：校验用户 → 调模型 → 落库会话与调用日志
+async def chat(
+    req: ChatRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> ChatResponse:
+    """单轮问答：以登录用户为准 → 校验试用期 → 调模型 → 落库
 
     失败语义：
-      - 用户不存在 → 404 NOT_FOUND
+      - 未登录 → 401 UNAUTHORIZED
+      - 试用期结束且未审核 → 403 TRIAL_EXPIRED（仍可查看历史）
       - 模型不存在 → 404 MODEL_NOT_FOUND
       - 模型调用失败 → 502 MODEL_CALL_FAILED（仍写一条 error 日志）
     """
+    user_service.ensure_chat_allowed(current_user)
+    req = req.model_copy(update={"user_id": current_user.id})
     return await chat_service.ask(db, req)
 
 
@@ -130,17 +145,14 @@ async def list_history(
     user_id: int,
     limit: int = Query(20, ge=1, le=100),
     offset: int = Query(0, ge=0),
-    # 本期用请求头模拟登录态；接入 JWT 后改为从 Token 解析 current_user
-    x_user_id: int | None = Header(None, alias="X-User-Id",
-                                  description="当前登录用户，接入 JWT 后由 Token 解析"),
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> HistoryResponse:
-    """查询指定用户未删除的问答记录
-
-    limit 上限 100，防止一次拉取过多数据；不带 X-User-Id 时按本地联调放行。
-    """
+    """查询指定用户未删除的问答记录；登录用户只能查自己"""
+    await user_service.check_owner(current_user.id, user_id)
     return await history_service.list_history(
-        db, user_id, limit=limit, offset=offset, current_user_id=x_user_id
+        db, user_id, limit=limit, offset=offset,
+        current_user_id=current_user.id,
     )
 
 
@@ -152,25 +164,13 @@ async def list_history(
                response_model=DeleteResponse)
 async def delete_history(
     session_id: int,
-    x_user_id: int | None = Header(None, alias="X-User-Id"),
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> DeleteResponse:
     """软删除指定会话：仅置 is_deleted=1，不物理删除
 
     重复删除同一 ID 也返回 deleted=True，保证前端重试安全。
     """
-    return await history_service.soft_delete(db, session_id, current_user_id=x_user_id)
-
-
-# ═══════════════════════════════════════════════════
-# 根路径
-# ═══════════════════════════════════════════════════
-
-@router.get("/", tags=["infra"])
-async def root() -> dict[str, str]:
-    """根路径：给出应用名与常用入口，方便浏览器直接访问"""
-    return {
-        "app": settings.APP_NAME,
-        "docs": "/docs",
-        "health": "/health",
-    }
+    return await history_service.soft_delete(
+        db, session_id, current_user_id=current_user.id
+    )
